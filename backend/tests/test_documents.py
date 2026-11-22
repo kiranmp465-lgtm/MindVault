@@ -1,9 +1,14 @@
-
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services import document_service
+
+from unittest.mock import patch
+
+from app.services.file_service import UPLOAD_DIR
+
 
 
 @pytest.fixture
@@ -100,3 +105,40 @@ def test_create_document_with_invalid_data(client):
     )
 
     assert response.status_code == 422
+
+def test_uploaded_file_deleted_when_extraction_fails(client):
+    """Uploaded PDF should be deleted if text extraction fails."""
+
+    # Generate a structurally valid PDF
+    pdf = pymupdf.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "MindVault cleanup test")
+
+    fake_pdf = pdf.tobytes()
+    pdf.close()
+
+    with patch(
+        "app.api.v1.endpoints.documents.extract_text_from_pdf",
+        side_effect=ValueError("Simulated extraction failure")
+    ):
+        response = client.post(
+            "/api/v1/documents/upload",
+            files={
+                "file": (
+                    "cleanup_test.pdf",
+                    fake_pdf,
+                    "application/pdf"
+                )
+            }
+        )
+
+    assert response.status_code == 422
+
+    # Find any remaining file with the test filename's generated storage ID.
+    # The API uses UUID filenames, so inspect the upload directory.
+    assert not any(
+        path.is_file()
+        and path.stat().st_size == len(fake_pdf)
+        and path.read_bytes() == fake_pdf
+        for path in UPLOAD_DIR.iterdir()
+    )

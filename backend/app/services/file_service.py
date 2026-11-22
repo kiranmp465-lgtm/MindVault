@@ -2,6 +2,8 @@
 from pathlib import Path
 from uuid import uuid4
 
+import pymupdf
+
 from fastapi import HTTPException, UploadFile, status
 
 
@@ -20,58 +22,88 @@ def ensure_upload_directory() -> None:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+
 async def save_pdf(file: UploadFile) -> dict:
-    """Validate and save an uploaded PDF."""
-
-    # Check the original filename
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are allowed."
-        )
-
-    # Check the declared content type
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file content type."
-        )
-
-    # Read at most 10 MB + 1 byte to detect oversized files
-    content = await file.read(MAX_FILE_SIZE + 1)
-
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds the 10 MB limit."
-        )
-
-    # Check the PDF file signature
-    if not content.startswith(b"%PDF-"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The uploaded file is not a valid PDF."
-        )
-
-    # Generate a unique server-controlled filename
-    stored_filename = f"{uuid4().hex}.pdf"
-    file_path = UPLOAD_DIR / stored_filename
-
-    ensure_upload_directory()
+    """Validate and safely save an uploaded PDF."""
 
     try:
-        file_path.write_bytes(content)
-    except OSError:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to save the uploaded file."
-        ) from None
+        # 1. Validate the filename
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only PDF files are allowed."
+            )
+
+        # 2. Validate the declared content type
+        if file.content_type != "application/pdf":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid file content type."
+            )
+
+        # 3. Read at most 10 MB + 1 byte
+        content = await file.read(MAX_FILE_SIZE + 1)
+
+        # 4. Check the file size
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="File size exceeds the 10 MB limit."
+            )
+
+        # 5. Check the PDF signature
+        if not content.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded file is not a valid PDF."
+            )
+
+        # 6. Validate the actual PDF structure
+        try:
+            with pymupdf.open(stream=content, filetype="pdf") as pdf:
+
+                if pdf.needs_pass:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Password-protected PDFs are not supported."
+                    )
+
+                if pdf.page_count == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="PDF must contain at least one page."
+                    )
+
+        except pymupdf.FileDataError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The uploaded PDF is corrupted or unreadable."
+            ) from None
+
+        # 7. Generate a unique server-controlled filename
+        stored_filename = f"{uuid4().hex}.pdf"
+        file_path = UPLOAD_DIR / stored_filename
+
+        ensure_upload_directory()
+
+        # 8. Save the validated PDF
+        try:
+            file_path.write_bytes(content)
+
+        except OSError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to save the uploaded file."
+            ) from None
+
+        return {
+            "filename": file.filename,
+            "stored_filename": stored_filename,
+            "size": len(content),
+            "status": "uploaded"
+        }
+
     finally:
+        # Always close the uploaded file
         await file.close()
 
-    return {
-        "filename": file.filename,
-        "stored_filename": stored_filename,
-        "size": len(content),
-        "status": "uploaded"
-    }

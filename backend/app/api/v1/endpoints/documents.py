@@ -62,20 +62,29 @@ def delete_document(document_id: int):
         )
 
 
+
 @router.post(
     "/upload",
     status_code=status.HTTP_201_CREATED
 )
 async def upload_document(file: UploadFile = File(...)):
-    """Upload a PDF and extract its text."""
+    """Upload a PDF, extract its text, and clean up on failure."""
 
     result = await save_pdf(file)
 
-    # Find the saved PDF
     file_path = UPLOAD_DIR / result["stored_filename"]
 
-    # Extract text from the PDF
-    extracted_data = extract_text_from_pdf(file_path)
+    try:
+        extracted_data = extract_text_from_pdf(file_path)
+
+    except Exception:
+        # Remove the uploaded PDF if extraction fails
+        file_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Unable to extract text from the uploaded PDF."
+        ) from None
 
     return {
         "message": "PDF uploaded and processed successfully",
