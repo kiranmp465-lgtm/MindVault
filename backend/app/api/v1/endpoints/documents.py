@@ -1,4 +1,8 @@
+from app.services.pdf_service import extract_text_from_pdf
+from app.services.file_service import UPLOAD_DIR
+from fastapi import APIRouter, HTTPException, UploadFile, File, status
 
+from app.services.file_service import save_pdf
 from fastapi import APIRouter, HTTPException, status
 
 from app.schemas.document import DocumentCreate, DocumentResponse
@@ -56,3 +60,29 @@ def delete_document(document_id: int):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found"
         )
+
+
+@router.post(
+    "/upload",
+    status_code=status.HTTP_201_CREATED
+)
+async def upload_document(file: UploadFile = File(...)):
+    """Upload a PDF and extract its text."""
+
+    result = await save_pdf(file)
+
+    # Find the saved PDF
+    file_path = UPLOAD_DIR / result["stored_filename"]
+
+    # Extract text from the PDF
+    extracted_data = extract_text_from_pdf(file_path)
+
+    return {
+        "message": "PDF uploaded and processed successfully",
+        "document": result,
+        "extraction": {
+            "total_pages": extracted_data["total_pages"],
+            "total_characters": extracted_data["total_characters"],
+            "text": extracted_data["text"]
+        }
+    }

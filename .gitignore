@@ -36,3 +36,6 @@ build/
 
 # Logs
 *.log
+# Uploaded user files
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
